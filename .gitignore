@@ -230,3 +230,10 @@ artifacts/
 # Structure file
 # ============================================================
 create_structure.py
+
+# ============================================================
+# Structure file
+# ============================================================
+
+scripts/inspect_raw_data.py
+scripts/validate_raw_data.py

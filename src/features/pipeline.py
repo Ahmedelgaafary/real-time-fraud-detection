@@ -44,17 +44,16 @@ class FeaturePipeline:
     def fit(
         cls,
         train_data: pd.DataFrame,
-        categorical_columns: tuple[str, ...] | None = None,
+        categorical_columns: tuple[str, ...] = (
+            DEFAULT_CATEGORICAL_COLUMNS
+        ),
         missingness_threshold: float = 0.05,
     ) -> FeaturePipeline:
         """
         Fit the feature pipeline using training data only.
 
-        Learned statistics are derived exclusively from the training
-        dataset to prevent data leakage.
-
-        If categorical_columns is not supplied, all object/category
-        columns in the training data are automatically detected.
+        All learned statistics are derived exclusively from the
+        training dataset to prevent data leakage.
         """
         if not isinstance(train_data, pd.DataFrame):
             raise FeaturePipelineError(
@@ -71,32 +70,16 @@ class FeaturePipeline:
                 "missingness_threshold must be between 0 and 1."
             )
 
-        # Automatically discover categorical columns when none are
-        # explicitly supplied. This is required for the IEEE-CIS dataset,
-        # which contains many categorical identity and transaction fields.
-        if categorical_columns is None:
-            detected_categorical = tuple(
-                train_data.select_dtypes(
-                    include=["object", "category"]
-                ).columns
-            )
+        selected_categorical_columns = tuple(categorical_columns)
 
-            categorical_columns = tuple(
-                column
-                for column in detected_categorical
-                if column != "isFraud"
-            )
-        else:
-            categorical_columns = tuple(categorical_columns)
-
-        if not categorical_columns:
+        if not selected_categorical_columns:
             raise FeaturePipelineError(
                 "At least one categorical column is required."
             )
 
         missing_categorical = [
             column
-            for column in categorical_columns
+            for column in selected_categorical_columns
             if column not in train_data.columns
         ]
 
@@ -109,7 +92,7 @@ class FeaturePipeline:
         try:
             categorical_encoder = FrequencyEncoder.fit(
                 train_data,
-                columns=categorical_columns,
+                columns=selected_categorical_columns,
             )
         except Exception as exc:
             raise FeaturePipelineError(
@@ -147,7 +130,7 @@ class FeaturePipeline:
 
         return cls(
             categorical_encoder=categorical_encoder,
-            categorical_columns=categorical_columns,
+            categorical_columns=selected_categorical_columns,
             missingness_columns=missingness_columns,
             numeric_imputer=numeric_imputer,
             numeric_columns=numeric_columns,
@@ -161,7 +144,12 @@ class FeaturePipeline:
         """
         Transform data using statistics learned from training data.
 
-        The returned DataFrame contains only numeric model features.
+        Original columns are preserved. Additional engineered columns
+        are added by the feature engineering stages.
+
+        The pipeline itself does not require the final output to be
+        entirely numeric. Model-specific code is responsible for
+        selecting the numeric features required by the estimator.
         """
         if not isinstance(data, pd.DataFrame):
             raise FeaturePipelineError(
@@ -207,16 +195,11 @@ class FeaturePipeline:
                 columns=self.missingness_columns,
             )
 
-            # Add frequency-encoded representations.
+            # Add frequency-encoded representations while preserving
+            # the original categorical columns.
             result = self.categorical_encoder.transform(result)
 
-            # Remove the original categorical columns.
-            # XGBoost requires numeric model inputs.
-            result = result.drop(
-                columns=list(self.categorical_columns),
-                errors="ignore",
-            )
-
+            # Apply the training-fitted numeric imputation strategy.
             result = self.numeric_imputer.transform(result)
 
         except Exception as exc:
@@ -227,17 +210,6 @@ class FeaturePipeline:
                 "Feature transformation failed."
             ) from exc
 
-        # Final safety check: the pipeline must return numeric features.
-        non_numeric_columns = result.select_dtypes(
-            exclude="number"
-        ).columns.tolist()
-
-        if non_numeric_columns:
-            raise FeaturePipelineError(
-                "Feature pipeline produced non-numeric columns: "
-                f"{non_numeric_columns}"
-            )
-
         return result
 
     def fit_transform(
@@ -246,6 +218,9 @@ class FeaturePipeline:
     ) -> pd.DataFrame:
         """
         Fit the pipeline on training data and transform it.
+
+        This method creates a new fitted pipeline using only
+        the supplied training data.
         """
         pipeline = type(self).fit(
             train_data,
